@@ -1,6 +1,6 @@
 
 import numpy as np
-import gym
+import gymnasium as gym
 
 
 class GymWrapper:
@@ -38,7 +38,7 @@ class GymWrapper:
             Returns:
                 next_obs (list): Next state
         """
-        state = self.env.reset()
+        state, info = self.env.reset()
         return np.expand_dims(state, axis=0)
 
     def step(self, action): #Expects a numpy action
@@ -61,9 +61,10 @@ class GymWrapper:
 
         reward = 0
         for _ in range(self.frameskip):
-            next_state, rew, done, info = self.env.step(action)
-            reward += rew
-            if done: break
+            next_state, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
+            reward += reward
+            if terminated or truncated: break
 
         next_state = np.expand_dims(next_state, axis=0)
         return next_state, reward, done, info

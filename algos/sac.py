@@ -39,42 +39,63 @@ class SAC(object):
     def update_parameters(self, state_batch, next_state_batch, action_batch, reward_batch, done_batch):
 
         state_batch = state_batch.to(self.device)
-        next_state_batch=next_state_batch.to(self.device)
-        action_batch=action_batch.to(self.device)
-        reward_batch=reward_batch.to(self.device)
-        done_batch=done_batch.to(self.device)
+        next_state_batch = next_state_batch.to(self.device)
+        action_batch = action_batch.to(self.device)
+        reward_batch = reward_batch.to(self.device)
+        done_batch = done_batch.to(self.device)
 
+        # ----------------------------
+        # 1. Critic (Q-function) Update
+        # ----------------------------
         with torch.no_grad():
-            next_state_action, next_state_log_pi,_,_,_= self.actor.noisy_action(next_state_batch,  return_only_action=False)
-            qf1_next_target, qf2_next_target,_ = self.critic_target.forward(next_state_batch, next_state_action)
+            next_state_action, next_state_log_pi, _, _, _ = self.actor.noisy_action(next_state_batch, return_only_action=False)
+            qf1_next_target, qf2_next_target, _ = self.critic_target.forward(next_state_batch, next_state_action)
             min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
             next_q_value = reward_batch + self.gamma * (min_qf_next_target) * (1 - done_batch)
             self.writer.add_scalar('next_q', next_q_value.mean().item())
 
-        qf1, qf2,_ = self.critic.forward(state_batch, action_batch)  # Two Q-functions to mitigate positive bias in the policy improvement step
-        qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-        qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-        self.writer.add_scalar('q_loss', (qf1_loss + qf2_loss).mean().item() / 2.0)
+        # Critic Forward
+        qf1, qf2, _ = self.critic.forward(state_batch, action_batch)
+        qf1_loss = F.mse_loss(qf1, next_q_value)
+        qf2_loss = F.mse_loss(qf2, next_q_value)
+        q_loss_total = qf1_loss + qf2_loss
+        self.writer.add_scalar('q_loss', q_loss_total.mean().item() / 2.0)
 
-        pi, log_pi, _,_,_ = self.actor.noisy_action(state_batch, return_only_action=False)
+        # Critic Backward & Step
+        self.critic_optim.zero_grad()
+        q_loss_total.backward()
+        self.critic_optim.step()
+
+        # ----------------------------
+        # 2. Actor (Policy) Update
+        # ----------------------------
+        # Criticの重みをフリーズ（勾配計算対象外にする）
+        for p in self.critic.parameters():
+            p.requires_grad = False
+
+        # Actor Forward (再計算: 最新のCriticに対してPolicyを評価するため)
+        pi, log_pi, _, _, _ = self.actor.noisy_action(state_batch, return_only_action=False)
         self.writer.add_scalar('log_pi', log_pi.mean().item())
 
         qf1_pi, qf2_pi, _ = self.critic.forward(state_batch, pi)
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
         self.writer.add_scalar('policy_q', min_qf_pi.mean().item())
 
-        policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean()  # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+        policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean()
         self.writer.add_scalar('policy_loss', policy_loss.mean().item())
 
-        self.critic_optim.zero_grad()
-        qf1_loss.backward()
-        qf2_loss.backward()
-        self.critic_optim.step()
-
+        # Actor Backward & Step
         self.actor_optim.zero_grad()
         policy_loss.backward()
         self.actor_optim.step()
 
+        # Criticの重みのフリーズ解除
+        for p in self.critic.parameters():
+            p.requires_grad = True
+
+        # ----------------------------
+        # 3. Soft Update
+        # ----------------------------
         self.num_updates += 1
         soft_update(self.critic_target, self.critic, self.tau)
 

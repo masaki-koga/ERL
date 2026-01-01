@@ -1,6 +1,5 @@
 
 from torch import nn
-from torch.autograd import Variable
 import random, pickle, copy, argparse
 import numpy as np, torch, os
 from torch import distributions
@@ -121,7 +120,9 @@ def to_tensor(ndarray, volatile=False, requires_grad=False):
     """
 
     if isinstance(ndarray, list): ndarray = np.array(ndarray)
-    return Variable(torch.from_numpy(ndarray).float(), volatile=volatile, requires_grad=requires_grad)
+    tensor = torch.from_numpy(ndarray).float()
+    tensor.requires_grad = requires_grad
+    return tensor
 
 def pickle_obj(filename, object):
     """Pickle object
